@@ -6,6 +6,9 @@
 #include <string.h>
 
 static pthread_mutex_t single_global_lock;
+static pthread_cond_t destroy_cond = PTHREAD_COND_INITIALIZER;
+static bool destroy_called = false;
+static int open_files = 0;
 
 int tfs_init() {
 	state_init();
@@ -14,9 +17,20 @@ int tfs_init() {
 		return -1;
 	}
 
+	if (pthread_mutex_lock(&single_global_lock) != 0) {
+		return -1;
+	}
+
+	destroy_called = false;
+	open_files = 0;
+
 	/* create root inode */
 	int root = inode_create(T_DIRECTORY);
 	if (root != ROOT_DIR_INUM) {
+		return -1;
+	}
+
+	if (pthread_mutex_unlock(&single_global_lock) != 0) {
 		return -1;
 	}
 
@@ -30,6 +44,10 @@ int tfs_destroy() {
 		return -1;
 	}
 
+	if (pthread_cond_destroy(&destroy_cond) != 0) {
+		return -1;
+	}
+
 	return 0;
 }
 
@@ -38,8 +56,25 @@ static bool valid_pathname(char const *name) {
 }
 
 int tfs_destroy_after_all_closed() {
-	/* TO DO: implement this */
-	return 0;
+	if (pthread_mutex_lock(&single_global_lock) != 0) {
+		return -1;
+	}
+
+	/** function has been called */
+	destroy_called = true;
+
+	/* while there are open files */
+	while (open_files != 0) {
+		if (pthread_cond_wait(&destroy_cond, &single_global_lock) != 0) {
+			return -1;
+		}
+	}
+
+	if (pthread_mutex_unlock(&single_global_lock) != 0) {
+		return -1;
+	}
+
+	return tfs_destroy();
 }
 
 int _tfs_lookup_unsynchronized(char const *name) {
@@ -129,7 +164,14 @@ int tfs_open(char const *name, int flags) {
 		return -1;
 	}
 
+	if (destroy_called) {
+		return -1;
+	}
+
 	int ret = _tfs_open_unsynchronized(name, flags);
+	if (ret != -1) {
+		open_files++;
+	}
 
 	if (pthread_mutex_unlock(&single_global_lock) != 0) {
 		return -1;
@@ -144,6 +186,13 @@ int tfs_close(int fhandle) {
 	}
 
 	int r = remove_from_open_file_table(fhandle);
+	if (r != -1) {
+		open_files--;
+	}
+
+	if (pthread_cond_signal(&destroy_cond) != 0) {
+		return -1;
+	}
 
 	if (pthread_mutex_unlock(&single_global_lock) != 0) {
 		return -1;
