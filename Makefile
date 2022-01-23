@@ -7,12 +7,13 @@ INCLUDES = $(addprefix -I, $(INCLUDE_DIRS))
 SOURCES := $(wildcard fs/*.c client/*.c common/*.c)
 HEADERS := $(wildcard fs/*.h client/*.h common/*.h)
 OBJECTS := $(SOURCES:.c=.o)
+TARGET_EXECS := fs/tfs_server
 
 TEST_FILES := $(wildcard tests/*.c)
 TEST_OBJECTS := $(TEST_FILES:.c=.o)
 TESTS := $(TEST_FILES:.c=)
 
-all:: $(OBJECTS)
+all:: $(OBJECTS) $(TARGET_EXECS)
 
 test-db%: test-db%.o fs/operations.o fs/state.o
 	$(CC) $(CFLAGS) $^ -o $@
@@ -26,4 +27,4 @@ tests:: $(TESTS) $(OBJECTS) $(TEST_OBJECTS) $(TESTS)
 	done
 
 clean::
-	rm -f $(OBJECTS) $(TESTS) $(TEST_OBJECTS) *.txt *.zip
+	rm -f $(OBJECTS) $(TESTS) $(TEST_OBJECTS) $(TARGET_EXECS) *.txt *.zip
