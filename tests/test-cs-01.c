@@ -26,6 +26,7 @@ int main(int argc, char **argv) {
 
 	assert(tfs_mount(argv[1], argv[2]) == 0);
 
+	/*
 	f = tfs_open(path, TFS_O_CREAT);
 	assert(f != -1);
 
@@ -44,6 +45,7 @@ int main(int argc, char **argv) {
 	assert(strcmp(buffer, str) == 0);
 
 	assert(tfs_close(f) != -1);
+	*/
 
 	assert(tfs_unmount() == 0);
 

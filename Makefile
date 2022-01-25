@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -std=c11 -D_POSIX_C_SOURCE=200809L -pthread
+CFLAGS = -std=c11 -D_POSIX_C_SOURCE=200809L -pthread -g
 
 INCLUDE_DIRS := fs common .
 INCLUDES = $(addprefix -I, $(INCLUDE_DIRS))
@@ -27,4 +27,4 @@ tests:: $(TESTS) $(OBJECTS) $(TEST_OBJECTS) $(TESTS)
 	done
 
 clean::
-	rm -f $(OBJECTS) $(TESTS) $(TEST_OBJECTS) $(TARGET_EXECS) *.txt *.zip
+	rm -f $(OBJECTS) $(TESTS) $(TEST_OBJECTS) $(TARGET_EXECS) *.txt *.zip *.pipe tests/*.pipe
