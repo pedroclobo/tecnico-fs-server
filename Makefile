@@ -13,7 +13,7 @@ TEST_FILES := $(wildcard tests/*.c)
 TEST_OBJECTS := $(TEST_FILES:.c=.o)
 TESTS := $(TEST_FILES:.c=)
 
-all:: $(OBJECTS) $(TARGET_EXECS)
+all:: $(OBJECTS) $(TARGET_EXECS) $(TESTS)
 
 test-db%: test-db%.o fs/operations.o fs/state.o
 	$(CC) $(CFLAGS) $^ -o $@
@@ -21,10 +21,8 @@ test-db%: test-db%.o fs/operations.o fs/state.o
 test-cs%: test-cs%.o client/tecnicofs_client_api.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-tests:: $(TESTS) $(OBJECTS) $(TEST_OBJECTS) $(TESTS)
-	@for test in $(TESTS); do \
-		./$$test; \
-	done
+tests::
+	(cd tests && bash run.sh)
 
 clean::
 	rm -f $(OBJECTS) $(TESTS) $(TEST_OBJECTS) $(TARGET_EXECS) *.txt *.zip *.pipe tests/*.pipe

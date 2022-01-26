@@ -6,100 +6,80 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <errno.h>
+#include <stdio.h>
+
+#define PIPE_NAME_MAX_SIZE 41
 
 int session_id;
 int client_pipe;
 int server_pipe;
-char const *client_pipe_path;
+char client_pipe_file[PIPE_NAME_MAX_SIZE];
 
 int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
 
-	if (unlink(client_pipe_path) != 0 && errno != ENOENT) {
+	/* Create client pipe */
+	if (unlink(client_pipe_path) == -1 && errno != ENOENT) {
 		return -1;
 	}
-	if (mkfifo(client_pipe_path, 0640) != 0) {
+	if (mkfifo(client_pipe_path, 0640) == -1) {
 		return -1;
 	}
+	strcpy(client_pipe_file, client_pipe_path);
 
-	if ((server_pipe = open(server_pipe_path, O_RDONLY)) != 0) {
-		return -1;
-	}
-
-	size_t written = 0;
-	ssize_t ret;
-	int op_code = TFS_OP_CODE_MOUNT;
-
-	while (written < 1) {
-		ret = write(server_pipe, &op_code, 1);
-		written += ret;
-		if (ret < 0) {
-			return -1;
-		}
-	}
-
-	written = 0;
-	while (written < strlen(client_pipe_path)) {
-		ret = write(server_pipe, client_pipe_path, strlen(client_pipe_path));
-		written += ret;
-		if (ret < 0) {
-			return -1;
-		}
-	}
-
-	if ((client_pipe = open(client_pipe_path, O_WRONLY)) != 0) {
+	/* Open server pipe */
+	if ((server_pipe = open(server_pipe_path, O_WRONLY)) == -1) {
 		return -1;
 	}
 
-	size_t received = 0;
-	while (received < sizeof(int)) {
-		ret = read(client_pipe, &session_id, sizeof(int));
-		received += ret;
-		if (ret < 0) {
-			return -1;
-		}
+	/* Send opcode to server */
+	char opcode = TFS_OP_CODE_MOUNT;
+	if (write(server_pipe, &opcode, sizeof(char)) == -1) {
+		return -1;
+	}
+
+	/* Send client pipe path to server */
+	if (write(server_pipe, client_pipe_path, strlen(client_pipe_path)) == -1) {
+		return -1;
+	}
+
+	/* Open client pipe */
+	if ((client_pipe = open(client_pipe_path, O_RDONLY)) == -1) {
+		return -1;
+	}
+
+	/* Receive session_id from server */
+	if (read(client_pipe, &session_id, sizeof(int)) == -1) {
+		return -1;
 	}
 
 	return 0;
 }
 
 int tfs_unmount() {
-	size_t written = 0;
-	ssize_t ret;
-	int op_code = TFS_OP_CODE_UNMOUNT;
 
-	while (written < 1) {
-		ret = write(server_pipe, &op_code, 1);
-		written += ret;
-		if (ret < 0) {
-			return -1;
-		}
+	/* Send opcode to server */
+	char opcode = TFS_OP_CODE_UNMOUNT;
+	if (write(server_pipe, &opcode, sizeof(char)) == -1) {
+		return -1;
 	}
 
-	written = 0;
-	while (written < sizeof(int)) {
-		ret = write(server_pipe, &session_id, sizeof(int));
-		written += ret;
-		if (ret < 0) {
-			return -1;
-		}
+	/* Send session_id to server */
+	if (write(server_pipe, &session_id, sizeof(int)) == -1) {
+		return -1;
 	}
 
-	size_t received = 0;
-	while (received < 4) {
-		ret = read(client_pipe, &session_id, sizeof(int));
-		received += ret;
-		if (ret < 0) {
-			return -1;
-		}
-	}
-
+	/* Close server pipe */
 	if (close(server_pipe) != 0) {
 		return -1;
 	}
+
+	/* Close client pipe */
 	if (close(client_pipe) != 0) {
 		return -1;
 	}
-	if (unlink(client_pipe_path) != 0) {
+
+	/* Delete client pipe */
+	if (unlink(client_pipe_file) != 0) {
 		return -1;
 	}
 

@@ -2,10 +2,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdbool.h>
-#include <string.h>
 #include <sys/stat.h>
-#include <sys/types.h>
 #include <unistd.h>
+#include <string.h>
 
 #define S 1
 #define PIPE_NAME_MAX_SIZE 41
@@ -18,8 +17,18 @@ typedef struct {
 
 session sessions[S];
 
+void init_server() {
+	for (int s = 0; s < S; s++) {
+		sessions[s].free = true;
+	}
+}
+
 int main(int argc, char **argv) {
 
+	/* Initialize server structures */
+	init_server();
+
+	/* Get server pipe name from command line */
 	if (argc < 2) {
 		printf("Please specify the pathname of the server's pipe.\n");
 		return 1;
@@ -28,61 +37,79 @@ int main(int argc, char **argv) {
 	printf("Starting TecnicoFS server with pipe called %s\n", pipename);
 
 	/* Unlink and create server pipe */
-	if (unlink(pipename) != 0 && errno != ENOENT) {
+	if (unlink(pipename) == -1 && errno != ENOENT) {
 		return -1;
 	}
-	if (mkfifo(pipename, 0640) < 0) {
+	if (mkfifo(pipename, 0777) == -1) {
 		return -1;
 	}
 
 	/* Open server pipe */
 	int server_pipe;
-	if ((server_pipe = open(pipename, O_RDONLY)) != 0) {
-		exit(-1);
+	if ((server_pipe = open(pipename, O_RDONLY)) == -1) {
+		return -1;
 	}
 
-	/* Read op-code */
-	int op_code;
-	read(server_pipe, &op_code, sizeof(int));
+	while (1) {
 
-	if (op_code == TFS_OP_CODE_MOUNT) {
-		int session_id;
-		for (int s = 0; s < S; s++) {
-			if (sessions[s].free) {
-				session_id = s;
+		/* Read op-code */
+		char opcode;
+		if (read(server_pipe, &opcode, sizeof(char)) == -1) {
+			return -1;
+		}
+
+		if (opcode == TFS_OP_CODE_MOUNT) {
+
+			/* Compute new session_id */
+			int session_id = -1;
+			for (int s = 0; s < S; s++) {
+				if (sessions[s].free) {
+					session_id = s;
+				}
 			}
-		}
-		sessions[session_id].free = false;
 
-		char client_pipe_path[PIPE_NAME_MAX_SIZE];
-		ssize_t ret;
-		ret = read(server_pipe, client_pipe_path, sizeof(client_pipe_path));
-		if (ret < 0) {
-			return -1;
-		}
-
-		if ((sessions[session_id].pipe = open(client_pipe_path, O_WRONLY)) != 0) {
-			return -1;
-		}
-
-		ssize_t written;
-		while (written < 1) {
-			ret = write(sessions[session_id].pipe, &session_id, 1);
-			written += ret;
-			if (ret < 0) {
+			/* Maximum active sessions have been reached */
+			if (session_id == -1) {
 				return -1;
 			}
-		}
 
-	} else if (op_code == TFS_OP_CODE_UNMOUNT) {
-		int session_id;
-		read(server_pipe, &session_id, sizeof(int));
-		sessions[session_id].free = true;
+			/* Thread is now occupied */
+			sessions[session_id].free = false;
+
+			/* Read client pipe path from client */
+			char client_pipe_path[PIPE_NAME_MAX_SIZE];
+			ssize_t ret;
+			if ((ret = read(server_pipe, client_pipe_path, PIPE_NAME_MAX_SIZE - 1)) == -1) {
+				return -1;
+			}
+			client_pipe_path[ret] = '\0';
+
+			/* Open client pipe */
+			if ((sessions[session_id].pipe = open(client_pipe_path, O_WRONLY)) == -1) {
+				return -1;
+			}
+
+			/* Write session_id to client */
+			if (write(sessions[session_id].pipe, &session_id, sizeof(int)) == -1) {
+				return -1;
+			}
+
+		} else if (opcode == TFS_OP_CODE_UNMOUNT) {
+			int session_id;
+			if (read(server_pipe, &session_id, sizeof(int) == -1)) {
+				return -1;
+			}
+			sessions[session_id].free = true;
+		}
 	}
 
 	/* Close and unlink server pipe */
-	close(server_pipe);
-	unlink(pipename);
+	if (close(server_pipe) != 0) {
+		return -1;
+	}
+	if (unlink(pipename) != 0) {
+		return -1;
+	}
 
 	return 0;
 }
