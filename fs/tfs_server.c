@@ -9,17 +9,32 @@
 #define S 1
 #define PIPE_NAME_MAX_SIZE 41
 
+enum state{CREATED = 2, TO_CREATE = 1, FREE = 0};
+
+typedef struct {
+	int fhandle;
+	char *str;
+	size_t size;
+} wr_struct;
+
+
 typedef struct {
 	pthread_t thread;
-	bool free;
+	enum state curr;
 	int pipe;
 } session;
 
 session sessions[S];
 
+void *write_to_tfs(void *w_struct) {
+	wr_struct *w = (wr_struct*) w_struct;
+	tfs_write(w->fhandle, w->str, strlen(w->str));
+	return NULL;
+}
+
 void init_server() {
 	for (int s = 0; s < S; s++) {
-		sessions[s].free = true;
+		sessions[s].curr = FREE;
 	}
 }
 
@@ -63,7 +78,7 @@ int main(int argc, char **argv) {
 			/* Compute new session_id */
 			int session_id = -1;
 			for (int s = 0; s < S; s++) {
-				if (sessions[s].free) {
+				if (sessions[s].curr == FREE) {
 					session_id = s;
 				}
 			}
@@ -74,7 +89,7 @@ int main(int argc, char **argv) {
 			}
 
 			/* Thread is now occupied */
-			sessions[session_id].free = false;
+			sessions[session_id].curr = TO_CREATE;
 
 			/* Read client pipe path from client */
 			char client_pipe_path[PIPE_NAME_MAX_SIZE];
@@ -96,10 +111,34 @@ int main(int argc, char **argv) {
 
 		} else if (opcode == TFS_OP_CODE_UNMOUNT) {
 			int session_id;
-			if (read(server_pipe, &session_id, sizeof(int) == -1)) {
+			if (read(server_pipe, &session_id, sizeof(int)) == -1) {
 				return -1;
 			}
-			sessions[session_id].free = true;
+			sessions[session_id].curr = FREE;
+		}
+		else {
+			int session_id;
+			if (read(server_pipe, &session_id, sizeof(int)) == -1) {
+				return -1;
+			}
+			if (opcode == TFS_OP_CODE_WRITE) {
+				int f;
+				size_t size;
+				if (read(server_pipe, &f, sizeof(int)) == -1) {
+					return -1;
+				}
+				if (read(server_pipe, &size, sizeof(size_t)) == -1) {
+					return -1;
+				}
+				char str[size];
+				if (read(server_pipe, str, size) == -1) {
+					return -1;
+				}
+				wr_struct w = { f, str, size};
+				if (sessions[session_id].curr == TO_CREATE) {
+					pthread_create(sessions[session_id].thread, NULL, write_to_tfs, (void*)&w);
+				}
+			}			
 		}
 	}
 
