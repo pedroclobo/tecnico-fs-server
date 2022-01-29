@@ -5,20 +5,19 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <string.h>
+#include <pthread.h>
 
 #define S 1
 #define PIPE_NAME_MAX_SIZE 41
 #define BUFFER_SIZE 1000
-enum state{CREATED = 2, TO_CREATE = 1, FREE = 0};
-
 
 typedef struct {
-	int opcode;
+	char opcode;
 	int session_id;
 	int fhandle;
 	int flags;
-	char *str;
 	size_t size;
+	char *str;
 } input_struct;
 
 typedef struct {
@@ -34,16 +33,85 @@ typedef struct {
 
 session sessions[S];
 
-void slave_thread(void* arg) {
-	int *session_id = (int*)arg;
+void *slave_thread(void* arg) {
+	int *session_id = (int*) arg;
+
+	int sent_bytes = 0;
+	session curr_session = sessions[session_id];
+
+	size_t len = sizeof(char) + 3*sizeof(int) + sizeof(size_t) + size;
+
+	while (sent_bytes < len) {
+		if (pthread_mutex_lock(&curr_session.lock_buffer) == -1) {
+			// mandar erro por pipe
+		}
+
+		while (curr_session.count == BUFFER_SIZE) {
+			pthread_cond_wait(&curr_session.a, &curr_session.lock_buffer);
+		}
+		memcpy(curr_session.buffer + sent_bytes, &opcode, sizeof(char));
+		sent_bytes += sizeof(int);
+
+		if (fhandle != -1) {
+			if (sizeof(int) + curr_session.count >= BUFFER_SIZE) {
+				pthread_cond_wait(&curr_session.a, &curr_session.lock_buffer);
+			}
+
+			memcpy(curr_session.buffer + sent_bytes, &fhandle, sizeof(int));
+			curr_session.count += sizeof(int);
+		}
+
+		if (flags != -1) {
+			if (sizeof(int) + curr_session.count >= BUFFER_SIZE) {
+				pthread_cond_wait(&curr_session.a, &curr_session.lock_buffer);
+			}
+
+			memcpy(curr_session.buffer + sent_bytes, &fhandle, sizeof(int));
+			curr_session.count += sizeof(int);
+		}
+
+		if (size != -1) {
+			if (sizeof(size_t) + curr_session.count >= BUFFER_SIZE) {
+				pthread_cond_wait(&curr_session.a, &curr_session.lock_buffer);
+			}
+
+			memcpy(curr_session.buffer + sent_bytes, &size, sizeof(size_t));
+			curr_session.count += sizeof(size_t);
+
+			if (size + curr_session.count >= BUFFER_SIZE) {
+				pthread_cond_wait(&curr_session.a, &curr_session.lock_buffer);
+			}
+
+			memcpy(curr_session.buffer + sent_bytes, buffer, size);
+			curr_session.count += size;
+		}
+
+		pthread_cond_signal(&curr_session.b);
+
 	/*resto*/
 
+	return NULL;
 }
 
-void init_server() {
+int init_server() {
 	for (int s = 0; s < S; s++) {
+		if (pthread_create(&sessions[s].thread, NULL, slave_thread, &s) != 0) {
+			return -1;
+		}
+		if (pthread_cond_init(&sessions[s].a, NULL) == -1) {
+			return -1;
+		}
+		if (pthread_cond_init(&sessions[s].b, NULL) == -1) {
+			return -1;
+		}
 		sessions[s].free = true;
 	}
+
+	if (tfs_init() == -1) {
+		return -1;
+	}
+
+	return 0;
 }
 
 int main(int argc, char **argv) {
@@ -75,12 +143,39 @@ int main(int argc, char **argv) {
 
 	while (1) {
 
-		/* Read op-code */
-		input_struct input;
-		if (read(server_pipe, &input, sizeof(input_struct)) == -1) {
+		/* Parse input */
+		char opcode;
+		if (read(server_pipe, &opcode, sizeof(char)) == -1) {
 			return -1;
 		}
-		if (input.opcode == TFS_OP_CODE_MOUNT) {
+
+		int session_id;
+		if (read(server_pipe, &session_id, sizeof(int)) == -1) {
+			return -1;
+		}
+
+		int fhandle;
+		if (read(server_pipe, &fhandle, sizeof(int)) == -1) {
+			return -1;
+		}
+
+		int flags;
+		if (read(server_pipe, &flags, sizeof(int)) == -1) {
+			return -1;
+		}
+
+		size_t size;
+		if (read(server_pipe, &size, sizeof(size_t)) == -1) {
+			return -1;
+		}
+
+		/* TODO */
+		char buffer[size];
+		if (read(server_pipe, buffer, size) == -1) {
+			return -1;
+		}
+
+		if (opcode == TFS_OP_CODE_MOUNT) {
 
 			/* Compute new session_id */
 			int session_id = -1;
@@ -116,37 +211,64 @@ int main(int argc, char **argv) {
 				return -1;
 			}
 
-		} else if (input.opcode == TFS_OP_CODE_UNMOUNT) {
+		} else if (opcode == TFS_OP_CODE_UNMOUNT) {
 			int session_id;
 			if (read(server_pipe, &session_id, sizeof(int)) == -1) {
 				return -1;
 			}
 			sessions[session_id].free = true;
+
 		} else {
 			int sent_bytes = 0;
-			session curr_session = sessions[input.session_id];
-			while(sent_bytes < sizeof(input) + input.size || (sent_bytes < sizeof(input) + input.size  && input.opcode == TFS_OP_CODE_OPEN)) {
-				pthread_mutex_lock(&curr_session.lock_buffer);
-				while (curr_session.count == BUFFER_SIZE) pthread_cond_wait(&curr_session.a, &curr_session.lock_buffer);
-				memcpy(curr_session.buffer, input.opcode, sizeof(int));
-				if (input.fhandle != -1) {
-					if (sizeof(int) + curr_session.count >= BUFFER_SIZE) pthread_cond_wait(&curr_session.a, &curr_session.lock_buffer);
-					memcpy(curr_session.buffer, input.fhandle, sizeof(int));
-					curr_session.count += sizeof(int); 
+			session curr_session = sessions[session_id];
+
+			size_t len = sizeof(char) + 3*sizeof(int) + sizeof(size_t) + size;
+
+			while (sent_bytes < len) {
+				if (pthread_mutex_lock(&curr_session.lock_buffer) == -1) {
+					return -1;
 				}
-				if (input.flags != -1) {
-					if (sizeof(int) + curr_session.count >= BUFFER_SIZE) pthread_cond_wait(&curr_session.a, &curr_session.lock_buffer);
-					memcpy(curr_session.buffer, input.fhandle, sizeof(int));
+
+				while (curr_session.count == BUFFER_SIZE) {
+					pthread_cond_wait(&curr_session.a, &curr_session.lock_buffer);
+				}
+				memcpy(curr_session.buffer + sent_bytes, &opcode, sizeof(char));
+				sent_bytes += sizeof(int);
+
+				if (fhandle != -1) {
+					if (sizeof(int) + curr_session.count >= BUFFER_SIZE) {
+						pthread_cond_wait(&curr_session.a, &curr_session.lock_buffer);
+					}
+
+					memcpy(curr_session.buffer + sent_bytes, &fhandle, sizeof(int));
 					curr_session.count += sizeof(int);
 				}
-				if (input.size != -1) {
-					if (sizeof(size_t) + curr_session.count >= BUFFER_SIZE) pthread_cond_wait(&curr_session.a, &curr_session.lock_buffer);
-					memcpy(curr_session.buffer, input.size, sizeof(size_t));
-					curr_session.count += sizeof(size_t);
-					if (input.size + curr_session.count >= BUFFER_SIZE) pthread_cond_wait(&curr_session.a, &curr_session.lock_buffer);
-					memcpy(curr_session.buffer, input.str, input.size);
-					curr_session.count += input.size;
+
+				if (flags != -1) {
+					if (sizeof(int) + curr_session.count >= BUFFER_SIZE) {
+						pthread_cond_wait(&curr_session.a, &curr_session.lock_buffer);
+					}
+
+					memcpy(curr_session.buffer + sent_bytes, &fhandle, sizeof(int));
+					curr_session.count += sizeof(int);
 				}
+
+				if (size != -1) {
+					if (sizeof(size_t) + curr_session.count >= BUFFER_SIZE) {
+						pthread_cond_wait(&curr_session.a, &curr_session.lock_buffer);
+					}
+
+					memcpy(curr_session.buffer + sent_bytes, &size, sizeof(size_t));
+					curr_session.count += sizeof(size_t);
+
+					if (size + curr_session.count >= BUFFER_SIZE) {
+						pthread_cond_wait(&curr_session.a, &curr_session.lock_buffer);
+					}
+
+					memcpy(curr_session.buffer + sent_bytes, buffer, size);
+					curr_session.count += size;
+				}
+
 				pthread_cond_signal(&curr_session.b);
 			}
 		}
