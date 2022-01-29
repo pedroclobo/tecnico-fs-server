@@ -13,12 +13,15 @@ TEST_FILES := $(wildcard tests/*.c)
 TEST_OBJECTS := $(TEST_FILES:.c=.o)
 TESTS := $(TEST_FILES:.c=)
 
-all:: $(OBJECTS) $(TARGET_EXECS) $(TESTS)
+all:: $(OBJECTS) $(TESTS) fs/tfs_server
 
 test-db%: test-db%.o fs/operations.o fs/state.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 test-cs%: test-cs%.o client/tecnicofs_client_api.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+fs/tfs_server: fs/*.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 tests::

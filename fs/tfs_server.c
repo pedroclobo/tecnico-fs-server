@@ -5,28 +5,61 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <string.h>
+#include <pthread.h>
 
 #define S 1
-#define PIPE_NAME_MAX_SIZE 41
+#define PIPE_PATH_MAX_SIZE 41
+#define FILE_NAME_MAX_SIZE 41
+#define BUFFER_SIZE 128
 
 typedef struct {
 	pthread_t thread;
+	char buffer[BUFFER_SIZE];
+	pthread_cond_t consume;
+	pthread_cond_t produce;
 	bool free;
 	int pipe;
 } session;
 
 session sessions[S];
 
-void init_server() {
+void *thread_function(void *arg) {
+
+	/* TODO produtor-consumidor */
+	while (1) {
+
+	}
+
+	return NULL;
+}
+
+int init_server() {
 	for (int s = 0; s < S; s++) {
+		if (pthread_create(&sessions[s].thread, NULL, thread_function, NULL) != 0) {
+			return -1;
+		}
+		if (pthread_cond_init(&sessions[s].consume, NULL) == -1) {
+			return -1;
+		}
+		if (pthread_cond_init(&sessions[s].produce, NULL) == -1) {
+			return -1;
+		}
 		sessions[s].free = true;
 	}
+
+	if (tfs_init() == -1) {
+		return -1;
+	}
+
+	return 0;
 }
 
 int main(int argc, char **argv) {
 
 	/* Initialize server structures */
-	init_server();
+	if (init_server() == -1) {
+		return -1;
+	}
 
 	/* Get server pipe name from command line */
 	if (argc < 2) {
@@ -77,9 +110,9 @@ int main(int argc, char **argv) {
 			sessions[session_id].free = false;
 
 			/* Read client pipe path from client */
-			char client_pipe_path[PIPE_NAME_MAX_SIZE];
+			char client_pipe_path[PIPE_PATH_MAX_SIZE];
 			ssize_t ret;
-			if ((ret = read(server_pipe, client_pipe_path, PIPE_NAME_MAX_SIZE - 1)) == -1) {
+			if ((ret = read(server_pipe, client_pipe_path, PIPE_PATH_MAX_SIZE - 1)) == -1) {
 				return -1;
 			}
 			client_pipe_path[ret] = '\0';
@@ -100,6 +133,49 @@ int main(int argc, char **argv) {
 				return -1;
 			}
 			sessions[session_id].free = true;
+
+		} else if (opcode == TFS_OP_CODE_OPEN) {
+
+			/* Read session_id from client */
+			int session_id;
+			if (read(server_pipe, &session_id, sizeof(int)) == -1) {
+				return -1;
+			}
+
+			/* Read file name from client */
+			char name[FILE_NAME_MAX_SIZE];
+			ssize_t ret;
+			if ((ret = read(server_pipe, name, FILE_NAME_MAX_SIZE - 1)) == -1) {
+				return -1;
+			}
+			name[ret] = '\0';
+
+			/* Read flags from client */
+			int flags;
+			if (read(server_pipe, &flags, sizeof(int)) == -1) {
+				return -1;
+			}
+
+			/* Comunicate with slave thread */
+
+		} else if (opcode == TFS_OP_CODE_SHUTDOWN_AFTER_ALL_CLOSED) {
+
+			/* Read session_id from client */
+			int session_id;
+			if (read(server_pipe, &session_id, sizeof(int)) == -1) {
+				return -1;
+			}
+
+			int ret = tfs_destroy_after_all_closed();
+			if (write(sessions[session_id].pipe, &ret, sizeof(int)) == -1) {
+				return -1;
+			}
+
+			if (ret == -1) {
+				return -1;
+			} else {
+				break;
+			}
 		}
 	}
 

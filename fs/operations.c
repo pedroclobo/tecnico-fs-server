@@ -60,10 +60,10 @@ int tfs_destroy_after_all_closed() {
 		return -1;
 	}
 
-	/** function has been called */
+	/* Function has been called */
 	destroy_called = true;
 
-	/* while there are open files */
+	/* While there are open files */
 	while (open_files != 0) {
 		if (pthread_cond_wait(&destroy_cond, &single_global_lock) != 0) {
 			return -1;

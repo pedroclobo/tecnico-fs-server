@@ -8,12 +8,13 @@
 #include <errno.h>
 #include <stdio.h>
 
-#define PIPE_NAME_MAX_SIZE 41
+#define PIPE_PATH_MAX_SIZE 41
+#define FILE_NAME_MAX_SIZE 41
 
 int session_id;
 int client_pipe;
 int server_pipe;
-char client_pipe_file[PIPE_NAME_MAX_SIZE];
+char client_pipe_file[PIPE_PATH_MAX_SIZE];
 
 int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
 
@@ -87,26 +88,127 @@ int tfs_unmount() {
 }
 
 int tfs_open(char const *name, int flags) {
-	/* TODO: Implement this */
-	return -1;
+
+	/* Send opcode to server */
+	char opcode = TFS_OP_CODE_OPEN;
+	if (write(server_pipe, &opcode, sizeof(char)) == -1) {
+		return -1;
+	}
+
+	/* Send session_id to server */
+	if (write(server_pipe, &session_id, sizeof(int)) == -1) {
+		return -1;
+	}
+
+	/* Send name to server */
+	if (write(server_pipe, &name, strlen(name)) == -1) {
+		return -1;
+	}
+
+	/* Send flags to server */
+	if (write(server_pipe, &flags, sizeof(int)) == -1) {
+		return -1;
+	}
+
+	return 0;
 }
 
 int tfs_close(int fhandle) {
-	/* TODO: Implement this */
-	return -1;
+
+	/* Send opcode to server */
+	char opcode = TFS_OP_CODE_CLOSE;
+	if (write(server_pipe, &opcode, sizeof(char)) == -1) {
+		return -1;
+	}
+
+	/* Send session_id to server */
+	if (write(server_pipe, &session_id, sizeof(int)) == -1) {
+		return -1;
+	}
+
+	/* Send file handle to server */
+	if (write(server_pipe, &fhandle, sizeof(int)) == -1) {
+		return -1;
+	}
+
+	return 0;
 }
 
 ssize_t tfs_write(int fhandle, void const *buffer, size_t len) {
-	/* TODO: Implement this */
-	return -1;
+
+	/* Send opcode to server */
+	char opcode = TFS_OP_CODE_WRITE;
+	if (write(server_pipe, &opcode, sizeof(char)) == -1) {
+		return -1;
+	}
+
+	/* Send session_id to server */
+	if (write(server_pipe, &session_id, sizeof(int)) == -1) {
+		return -1;
+	}
+
+	/* Send file handle to server */
+	if (write(server_pipe, &fhandle, sizeof(int)) == -1) {
+		return -1;
+	}
+
+	/* Send len to server */
+	if (write(server_pipe, &len, sizeof(size_t)) == -1) {
+		return -1;
+	}
+
+	/* Send buffer to server */
+	if (write(server_pipe, buffer, sizeof(buffer)) == -1) {
+		return -1;
+	}
+
+	return 0;
 }
 
 ssize_t tfs_read(int fhandle, void *buffer, size_t len) {
-	/* TODO: Implement this */
-	return -1;
+
+	/* Send opcode to server */
+	char opcode = TFS_OP_CODE_READ;
+	if (write(server_pipe, &opcode, sizeof(char)) == -1) {
+		return -1;
+	}
+
+	/* Send session_id to server */
+	if (write(server_pipe, &session_id, sizeof(int)) == -1) {
+		return -1;
+	}
+
+	/* Send file handle to server */
+	if (write(server_pipe, &fhandle, sizeof(int)) == -1) {
+		return -1;
+	}
+
+	/* Send len to server */
+	if (write(server_pipe, &len, sizeof(size_t)) == -1) {
+		return -1;
+	}
+
+	return 0;
 }
 
 int tfs_shutdown_after_all_closed() {
-	/* TODO: Implement this */
-	return -1;
+
+	/* Send opcode to server */
+	char opcode = TFS_OP_CODE_CLOSE;
+	if (write(server_pipe, &opcode, sizeof(char)) == -1) {
+		return -1;
+	}
+
+	/* Send session_id to server */
+	if (write(server_pipe, &session_id, sizeof(int)) == -1) {
+		return -1;
+	}
+
+	/* Receive return from server */
+	int ret;
+	if (read(client_pipe, &ret, sizeof(int)) == -1) {
+		return -1;
+	}
+
+	return ret;
 }
