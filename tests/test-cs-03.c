@@ -4,10 +4,13 @@
 #include <string.h>
 
 /**
- * Mount and umount client.
+ * Open and close tfs file.
  */
 
 int main(int argc, char **argv) {
+
+	char *path = "/f1";
+	int f;
 
 	if (argc < 3) {
 		printf("You must provide the following arguments: 'client_pipe_path "
@@ -16,6 +19,11 @@ int main(int argc, char **argv) {
 	}
 
 	assert(tfs_mount(argv[1], argv[2]) == 0);
+
+	f = tfs_open(path, TFS_O_CREAT);
+	assert(f != -1);
+
+	assert(tfs_close(f) != -1);
 
 	assert(tfs_unmount() == 0);
 

@@ -7,26 +7,68 @@
 #include <string.h>
 #include <pthread.h>
 
-#define S 1
-#define PIPE_PATH_MAX_SIZE 41
-#define FILE_NAME_MAX_SIZE 41
-#define BUFFER_SIZE 128
+#define S 20
+#define BUFFER_SIZE 10
 
 typedef struct {
 	pthread_t thread;
-	char buffer[BUFFER_SIZE];
-	pthread_cond_t consume;
-	pthread_cond_t produce;
+	pthread_mutex_t lock;
+	pthread_cond_t can_consume;
+	pthread_cond_t can_produce;
+	task_t buffer[BUFFER_SIZE];
+	int count;
+	int consptr;
+	int prodptr;
+
 	bool free;
 	int pipe;
 } session;
 
 session sessions[S];
 
-void *thread_function(void *arg) {
+void print_operation(task_t *op) {
+	printf("opcode: %d\n", op->opcode);
+	printf("session_id: %d\n", op->session_id);
+	printf("client_pipe_path: %s\n", op->client_pipe_path);
+	printf("name: %s\n", op->name);
+	printf("fhandle: %d\n", op->fhandle);
+	printf("flags: %d\n", op->flags);
+	printf("buffer: %s\n", op->buffer);
+	printf("len: %lu\n", op->len);
+}
 
-	/* TODO produtor-consumidor */
-	while (1) {
+void *thread_function(void *arg) {
+	int session_id = *(int*) arg;
+
+	while (true) {
+		if (pthread_mutex_lock(&sessions[session_id].lock) == -1) {
+			//
+		}
+		while (sessions[session_id].count == 0) {
+			pthread_cond_wait(&sessions[session_id].can_consume, &sessions[session_id].lock);
+		}
+		printf("treating open slave 1\n");
+
+		task_t operation = sessions[session_id].buffer[sessions[session_id].consptr];
+		sessions[session_id].consptr++; if (sessions[session_id].consptr == BUFFER_SIZE) sessions[session_id].consptr = 0;
+		sessions[session_id].count--;
+
+		pthread_cond_signal(&sessions[session_id].can_produce);
+
+		if (pthread_mutex_unlock(&sessions[session_id].lock) == -1) {
+			//
+		}
+
+		if (operation.opcode == TFS_OP_CODE_OPEN) {
+			int ret = tfs_open(operation.name, operation.flags);
+			// TODO error verification
+			write(sessions[session_id].pipe, &ret, sizeof(int));
+
+		} else if (operation.opcode == TFS_OP_CODE_CLOSE) {
+			int ret = tfs_close(operation.fhandle);
+			// TODO error verification
+			write(sessions[session_id].pipe, &ret, sizeof(int));
+		}
 
 	}
 
@@ -34,19 +76,37 @@ void *thread_function(void *arg) {
 }
 
 int init_server() {
+
+	/* Prevent data races on threads initialization */
+	int ids[S];
 	for (int s = 0; s < S; s++) {
-		if (pthread_create(&sessions[s].thread, NULL, thread_function, NULL) != 0) {
-			return -1;
-		}
-		if (pthread_cond_init(&sessions[s].consume, NULL) == -1) {
-			return -1;
-		}
-		if (pthread_cond_init(&sessions[s].produce, NULL) == -1) {
-			return -1;
-		}
-		sessions[s].free = true;
+		ids[s] = s;
 	}
 
+	/* Initialize threads */
+	for (int s = 0; s < S; s++) {
+		if (pthread_mutex_init(&sessions[s].lock, NULL) == -1) {
+			return -1;
+		}
+		if (pthread_cond_init(&sessions[s].can_consume, NULL) == -1) {
+			return -1;
+		}
+		if (pthread_cond_init(&sessions[s].can_produce, NULL) == -1) {
+			return -1;
+		}
+		sessions[s].count = 0;
+		sessions[s].consptr = 0;
+		sessions[s].prodptr = 0;
+
+		sessions[s].free = true;
+
+		/* Create slave thread */
+		if (pthread_create(&sessions[s].thread, NULL, thread_function, &ids[s]) != 0) {
+			return -1;
+		}
+	}
+
+	/* Initialize tfs */
 	if (tfs_init() == -1) {
 		return -1;
 	}
@@ -56,7 +116,7 @@ int init_server() {
 
 int main(int argc, char **argv) {
 
-	/* Initialize server structures */
+	/* Initialize server */
 	if (init_server() == -1) {
 		return -1;
 	}
@@ -83,91 +143,61 @@ int main(int argc, char **argv) {
 		return -1;
 	}
 
-	while (1) {
+	while (true) {
 
-		/* Read op-code */
-		char opcode;
-		if (read(server_pipe, &opcode, sizeof(char)) == -1) {
+		//FIXME
+		/* Read request */
+		task_t operation;
+		if (read(server_pipe, &operation, sizeof(task_t)) == -1) {
 			return -1;
 		}
 
-		if (opcode == TFS_OP_CODE_MOUNT) {
+		int ret = 0;
+
+		if (operation.opcode == TFS_OP_CODE_MOUNT) {
 
 			/* Compute new session_id */
 			int session_id = -1;
 			for (int s = 0; s < S; s++) {
 				if (sessions[s].free) {
 					session_id = s;
+					break;
 				}
 			}
 
 			/* Maximum active sessions have been reached */
 			if (session_id == -1) {
-				return -1;
+				ret = -1;
 			}
 
 			/* Thread is now occupied */
 			sessions[session_id].free = false;
 
-			/* Read client pipe path from client */
-			char client_pipe_path[PIPE_PATH_MAX_SIZE];
-			ssize_t ret;
-			if ((ret = read(server_pipe, client_pipe_path, PIPE_PATH_MAX_SIZE - 1)) == -1) {
-				return -1;
-			}
-			client_pipe_path[ret] = '\0';
-
 			/* Open client pipe */
-			if ((sessions[session_id].pipe = open(client_pipe_path, O_WRONLY)) == -1) {
-				return -1;
+			if ((sessions[session_id].pipe = open(operation.client_pipe_path, O_WRONLY)) == -1) {
+				ret = -1;
 			}
 
 			/* Write session_id to client */
 			if (write(sessions[session_id].pipe, &session_id, sizeof(int)) == -1) {
-				return -1;
+				ret = -1;
 			}
 
-		} else if (opcode == TFS_OP_CODE_UNMOUNT) {
-			int session_id;
-			if (read(server_pipe, &session_id, sizeof(int) == -1)) {
-				return -1;
-			}
-			sessions[session_id].free = true;
+			// TODO error verification
+			write(sessions[session_id].pipe, &ret, sizeof(int));
 
-		} else if (opcode == TFS_OP_CODE_OPEN) {
+		} else if (operation.opcode == TFS_OP_CODE_UNMOUNT) {
 
-			/* Read session_id from client */
-			int session_id;
-			if (read(server_pipe, &session_id, sizeof(int)) == -1) {
-				return -1;
-			}
+			/* Thread is now free */
+			sessions[operation.session_id].free = true;
 
-			/* Read file name from client */
-			char name[FILE_NAME_MAX_SIZE];
-			ssize_t ret;
-			if ((ret = read(server_pipe, name, FILE_NAME_MAX_SIZE - 1)) == -1) {
-				return -1;
-			}
-			name[ret] = '\0';
+			/* Send return to client */
+			write(sessions[operation.session_id].pipe, &ret, sizeof(int));
 
-			/* Read flags from client */
-			int flags;
-			if (read(server_pipe, &flags, sizeof(int)) == -1) {
-				return -1;
-			}
-
-			/* Comunicate with slave thread */
-
-		} else if (opcode == TFS_OP_CODE_SHUTDOWN_AFTER_ALL_CLOSED) {
-
-			/* Read session_id from client */
-			int session_id;
-			if (read(server_pipe, &session_id, sizeof(int)) == -1) {
-				return -1;
-			}
+		} else if (operation.opcode == TFS_OP_CODE_SHUTDOWN_AFTER_ALL_CLOSED) {
 
 			int ret = tfs_destroy_after_all_closed();
-			if (write(sessions[session_id].pipe, &ret, sizeof(int)) == -1) {
+			if (write(sessions[operation.session_id].pipe, &ret, sizeof(int)) == -1) {
 				return -1;
 			}
 
@@ -176,6 +206,30 @@ int main(int argc, char **argv) {
 			} else {
 				break;
 			}
+
+		} else if (operation.opcode == TFS_OP_CODE_OPEN || operation.opcode == TFS_OP_CODE_WRITE || operation.opcode == TFS_OP_CODE_READ || operation.opcode == TFS_OP_CODE_CLOSE) {
+
+			if (pthread_mutex_lock(&sessions[operation.session_id].lock) == -1) {
+				//
+			}
+
+			while (sessions[operation.session_id].count == BUFFER_SIZE) {
+				pthread_cond_wait(&sessions[operation.session_id].can_produce, &sessions[operation.session_id].lock);
+			}
+
+			sessions[operation.session_id].buffer[sessions[operation.session_id].prodptr] = operation;
+
+			sessions[operation.session_id].prodptr++; if (sessions[operation.session_id].prodptr == BUFFER_SIZE) sessions[operation.session_id].prodptr = 0;
+			sessions[operation.session_id].count++;
+
+			pthread_cond_signal(&sessions[operation.session_id].can_consume);
+
+			printf("treating open master\n");
+
+			if (pthread_mutex_unlock(&sessions[operation.session_id].lock) == -1) {
+				//
+			}
+
 		}
 	}
 

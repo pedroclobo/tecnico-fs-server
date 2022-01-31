@@ -1,3 +1,5 @@
+#include<stdlib.h>
+
 #ifndef COMMON_H
 #define COMMON_H
 
@@ -18,5 +20,20 @@ enum {
 	TFS_OP_CODE_READ = 6,
 	TFS_OP_CODE_SHUTDOWN_AFTER_ALL_CLOSED = 7
 };
+
+#define PIPE_PATH_MAX_SIZE 41
+#define FILE_NAME_MAX_SIZE 41
+
+/* operation wrapper (for client-server requests) */
+typedef struct {
+	char opcode;
+	int session_id;
+	char client_pipe_path[PIPE_PATH_MAX_SIZE];
+	char name[FILE_NAME_MAX_SIZE];
+	int fhandle;
+	int flags;
+	char buffer[1025];
+	size_t len;
+} task_t;
 
 #endif

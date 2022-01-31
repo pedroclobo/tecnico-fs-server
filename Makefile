@@ -1,5 +1,7 @@
 CC = gcc
 CFLAGS = -std=c11 -D_POSIX_C_SOURCE=200809L -pthread -g
+#CFLAGS += -fsanitize=thread
+CFLAGS += -fsanitize=address -fsanitize=leak
 
 INCLUDE_DIRS := fs common .
 INCLUDES = $(addprefix -I, $(INCLUDE_DIRS))
