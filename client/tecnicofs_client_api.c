@@ -188,5 +188,10 @@ int tfs_shutdown_after_all_closed() {
 		return -1;
 	}
 
+	int ret;
+	if (read(client_pipe, &ret, sizeof(int)) == -1) {
+		return -1;
+	}
+
 	return 0;
 }
