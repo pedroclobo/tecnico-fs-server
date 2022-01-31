@@ -47,7 +47,6 @@ void *thread_function(void *arg) {
 		while (sessions[session_id].count == 0) {
 			pthread_cond_wait(&sessions[session_id].can_consume, &sessions[session_id].lock);
 		}
-		printf("treating open slave 1\n");
 
 		task_t operation = sessions[session_id].buffer[sessions[session_id].consptr];
 		sessions[session_id].consptr++; if (sessions[session_id].consptr == BUFFER_SIZE) sessions[session_id].consptr = 0;
@@ -68,6 +67,19 @@ void *thread_function(void *arg) {
 			int ret = tfs_close(operation.fhandle);
 			// TODO error verification
 			write(sessions[session_id].pipe, &ret, sizeof(int));
+
+		} else if (operation.opcode == TFS_OP_CODE_WRITE) {
+			ssize_t ret = tfs_write(operation.fhandle, operation.buffer, operation.len);
+			// TODO error verification
+			write(sessions[session_id].pipe, &ret, sizeof(ssize_t));
+
+		} else if (operation.opcode == TFS_OP_CODE_READ) {
+			ssize_t ret = tfs_read(operation.fhandle, operation.buffer, operation.len);
+			// TODO error verification
+			write(sessions[session_id].pipe, &ret, sizeof(ssize_t));
+			if (ret != -1) {
+				write(sessions[session_id].pipe, operation.buffer, ret);
+			}
 		}
 
 	}
@@ -145,11 +157,13 @@ int main(int argc, char **argv) {
 
 	while (true) {
 
-		//FIXME
 		/* Read request */
 		task_t operation;
-		if (read(server_pipe, &operation, sizeof(task_t)) == -1) {
-			return -1;
+		size_t r;
+		while ((r = read(server_pipe, &operation, sizeof(task_t))) != sizeof(task_t)) {
+			if (r == -1) {
+				return -1;
+			}
 		}
 
 		int ret = 0;
@@ -223,8 +237,6 @@ int main(int argc, char **argv) {
 			sessions[operation.session_id].count++;
 
 			pthread_cond_signal(&sessions[operation.session_id].can_consume);
-
-			printf("treating open master\n");
 
 			if (pthread_mutex_unlock(&sessions[operation.session_id].lock) == -1) {
 				//

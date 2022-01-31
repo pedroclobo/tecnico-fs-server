@@ -143,7 +143,12 @@ ssize_t tfs_write(int fhandle, void const *buffer, size_t len) {
 		return -1;
 	}
 
-	return 0;
+	ssize_t ret;
+	if (read(client_pipe, &ret, sizeof(ssize_t)) == -1) {
+		return -1;
+	}
+
+	return ret;
 }
 
 ssize_t tfs_read(int fhandle, void *buffer, size_t len) {
@@ -158,7 +163,19 @@ ssize_t tfs_read(int fhandle, void *buffer, size_t len) {
 		return -1;
 	}
 
-	return 0;
+	ssize_t size;
+	if (read(client_pipe, &size, sizeof(ssize_t)) == -1) {
+		return -1;
+	}
+	if (size == -1) {
+		return -1;
+	}
+
+	if (read(client_pipe, buffer, size) == -1) {
+		return -1;
+	}
+
+	return size;
 }
 
 int tfs_shutdown_after_all_closed() {
