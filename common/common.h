@@ -23,6 +23,7 @@ enum {
 
 #define PIPE_PATH_MAX_SIZE 41
 #define FILE_NAME_MAX_SIZE 41
+#define FILE_MAX_SIZE 1024
 
 /* operation wrapper (for client-server requests) */
 typedef struct {
@@ -32,7 +33,7 @@ typedef struct {
 	char name[FILE_NAME_MAX_SIZE];
 	int fhandle;
 	int flags;
-	char buffer[1025];
+	char buffer[FILE_MAX_SIZE+1];
 	size_t len;
 } task_t;
 

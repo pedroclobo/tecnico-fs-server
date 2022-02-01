@@ -7,7 +7,9 @@
 #include <string.h>
 #include <pthread.h>
 
+/* Number of max session_ids */
 #define S 20
+
 #define BUFFER_SIZE 10
 
 typedef struct {
@@ -19,66 +21,64 @@ typedef struct {
 	int count;
 	int consptr;
 	int prodptr;
-
 	bool free;
 	int pipe;
 } session;
 
 session sessions[S];
 
-void print_operation(task_t *op) {
-	printf("opcode: %d\n", op->opcode);
-	printf("session_id: %d\n", op->session_id);
-	printf("client_pipe_path: %s\n", op->client_pipe_path);
-	printf("name: %s\n", op->name);
-	printf("fhandle: %d\n", op->fhandle);
-	printf("flags: %d\n", op->flags);
-	printf("buffer: %s\n", op->buffer);
-	printf("len: %lu\n", op->len);
-}
-
 void *thread_function(void *arg) {
 	int session_id = *(int*) arg;
 
 	while (true) {
 		if (pthread_mutex_lock(&sessions[session_id].lock) == -1) {
-			//
+			exit(EXIT_FAILURE);
 		}
 		while (sessions[session_id].count == 0) {
-			pthread_cond_wait(&sessions[session_id].can_consume, &sessions[session_id].lock);
+			if (pthread_cond_wait(&sessions[session_id].can_consume, &sessions[session_id].lock) != 0) {
+				exit(EXIT_FAILURE);
+			}
 		}
 
 		task_t operation = sessions[session_id].buffer[sessions[session_id].consptr];
 		sessions[session_id].consptr++; if (sessions[session_id].consptr == BUFFER_SIZE) sessions[session_id].consptr = 0;
 		sessions[session_id].count--;
 
-		pthread_cond_signal(&sessions[session_id].can_produce);
+		if (pthread_cond_signal(&sessions[session_id].can_produce) != 0) {
+			exit(EXIT_FAILURE);
+		}
 
 		if (pthread_mutex_unlock(&sessions[session_id].lock) == -1) {
-			//
+			exit(EXIT_FAILURE);
 		}
 
 		if (operation.opcode == TFS_OP_CODE_OPEN) {
 			int ret = tfs_open(operation.name, operation.flags);
-			// TODO error verification
-			write(sessions[session_id].pipe, &ret, sizeof(int));
+			if (write(sessions[session_id].pipe, &ret, sizeof(int)) == -1) {
+				exit(EXIT_FAILURE);
+			}
 
 		} else if (operation.opcode == TFS_OP_CODE_CLOSE) {
 			int ret = tfs_close(operation.fhandle);
-			// TODO error verification
-			write(sessions[session_id].pipe, &ret, sizeof(int));
+			if (write(sessions[session_id].pipe, &ret, sizeof(int)) == -1) {
+				exit(EXIT_FAILURE);
+			}
 
 		} else if (operation.opcode == TFS_OP_CODE_WRITE) {
 			ssize_t ret = tfs_write(operation.fhandle, operation.buffer, operation.len);
-			// TODO error verification
-			write(sessions[session_id].pipe, &ret, sizeof(ssize_t));
+			if (write(sessions[session_id].pipe, &ret, sizeof(ssize_t)) == -1) {
+				exit(EXIT_FAILURE);
+			}
 
 		} else if (operation.opcode == TFS_OP_CODE_READ) {
 			ssize_t ret = tfs_read(operation.fhandle, operation.buffer, operation.len);
-			// TODO error verification
-			write(sessions[session_id].pipe, &ret, sizeof(ssize_t));
+			if (write(sessions[session_id].pipe, &ret, sizeof(ssize_t)) == -1) {
+				exit(EXIT_FAILURE);
+			}
 			if (ret != -1) {
-				write(sessions[session_id].pipe, operation.buffer, ret);
+				if (write(sessions[session_id].pipe, operation.buffer, ret) == 1) {
+					exit(EXIT_FAILURE);
+				}
 			}
 		}
 
@@ -112,7 +112,7 @@ int init_server() {
 
 		sessions[s].free = true;
 
-		/* Create slave thread */
+		/* Create slave threads */
 		if (pthread_create(&sessions[s].thread, NULL, thread_function, &ids[s]) != 0) {
 			return -1;
 		}
@@ -155,6 +155,7 @@ int main(int argc, char **argv) {
 		return -1;
 	}
 
+	/* Read and treat requests */
 	while (true) {
 
 		/* Read request */
@@ -167,7 +168,6 @@ int main(int argc, char **argv) {
 		}
 
 		int ret = 0;
-
 		if (operation.opcode == TFS_OP_CODE_MOUNT) {
 
 			/* Compute new session_id */
@@ -197,8 +197,9 @@ int main(int argc, char **argv) {
 				ret = -1;
 			}
 
-			// TODO error verification
-			write(sessions[session_id].pipe, &ret, sizeof(int));
+			if (write(sessions[session_id].pipe, &ret, sizeof(int)) == -1) {
+				exit(EXIT_FAILURE);
+			}
 
 		} else if (operation.opcode == TFS_OP_CODE_UNMOUNT) {
 
@@ -224,11 +225,13 @@ int main(int argc, char **argv) {
 		} else if (operation.opcode == TFS_OP_CODE_OPEN || operation.opcode == TFS_OP_CODE_WRITE || operation.opcode == TFS_OP_CODE_READ || operation.opcode == TFS_OP_CODE_CLOSE) {
 
 			if (pthread_mutex_lock(&sessions[operation.session_id].lock) == -1) {
-				//
+				exit(EXIT_FAILURE);
 			}
 
 			while (sessions[operation.session_id].count == BUFFER_SIZE) {
-				pthread_cond_wait(&sessions[operation.session_id].can_produce, &sessions[operation.session_id].lock);
+				if (pthread_cond_wait(&sessions[operation.session_id].can_produce, &sessions[operation.session_id].lock) != 0) {
+					exit(EXIT_FAILURE);
+				}
 			}
 
 			sessions[operation.session_id].buffer[sessions[operation.session_id].prodptr] = operation;
@@ -236,10 +239,12 @@ int main(int argc, char **argv) {
 			sessions[operation.session_id].prodptr++; if (sessions[operation.session_id].prodptr == BUFFER_SIZE) sessions[operation.session_id].prodptr = 0;
 			sessions[operation.session_id].count++;
 
-			pthread_cond_signal(&sessions[operation.session_id].can_consume);
+			if (pthread_cond_signal(&sessions[operation.session_id].can_consume) != 0) {
+				exit(EXIT_FAILURE);
+			}
 
 			if (pthread_mutex_unlock(&sessions[operation.session_id].lock) == -1) {
-				//
+				exit(EXIT_FAILURE);
 			}
 
 		}
