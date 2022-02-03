@@ -60,55 +60,103 @@ void *thread_function(void *arg) {
 	/* Grab thread session id */
 	int session_id = *(int*) arg;
 
+	/* Refer to session structure with more ease */
+	pthread_mutex_t *lock = &sessions[session_id].lock;
+	pthread_cond_t *can_consume = &sessions[session_id].can_consume;
+	pthread_cond_t *can_produce = &sessions[session_id].can_produce;
+	task_t *buffer = sessions[session_id].buffer;
+	int *count = &sessions[session_id].count;
+	int *consptr = &sessions[session_id].consptr;
+	bool *free = &sessions[session_id].free;
+	int *client_pipe = &sessions[session_id].pipe;
+
 	/* Consumidor */
 	while (true) {
-		if (pthread_mutex_lock(&sessions[session_id].lock) == -1) {
+		if (pthread_mutex_lock(lock) == -1) {
 			exit(EXIT_FAILURE);
 		}
-		while (sessions[session_id].count == 0) {
-			if (pthread_cond_wait(&sessions[session_id].can_consume, &sessions[session_id].lock) != 0) {
+
+		/* Wait for new requests */
+		while (*count == 0) {
+			if (pthread_cond_wait(can_consume, lock) != 0) {
 				exit(EXIT_FAILURE);
 			}
 		}
 
-		task_t operation = sessions[session_id].buffer[sessions[session_id].consptr];
-		sessions[session_id].consptr++; if (sessions[session_id].consptr == BUFFER_SIZE) sessions[session_id].consptr = 0;
-		sessions[session_id].count--;
+		/* Retrieve new request */
+		task_t operation = buffer[*consptr];
+		(*consptr)++; if (*consptr == BUFFER_SIZE) *consptr = 0;
+		(*count)--;
 
-		if (pthread_cond_signal(&sessions[session_id].can_produce) != 0) {
+		/* Signal productor */
+		if (pthread_cond_signal(can_produce) != 0) {
 			exit(EXIT_FAILURE);
 		}
 
-		if (pthread_mutex_unlock(&sessions[session_id].lock) == -1) {
+		if (pthread_mutex_unlock(lock) == -1) {
 			exit(EXIT_FAILURE);
 		}
 
 		/* Treat request */
 		switch (operation.opcode) {
 		case TFS_OP_CODE_OPEN: {
+
+			/* Send return to client */
 			int ret = tfs_open(operation.name, operation.flags);
-			send_msg(sessions[session_id].pipe, &ret, sizeof(int), session_id);
+			send_msg(*client_pipe, &ret, sizeof(int), session_id);
 			break;
 		}
 
 		case TFS_OP_CODE_CLOSE: {
+
+			/* Send return to client */
 			int ret = tfs_close(operation.fhandle);
-			send_msg(sessions[session_id].pipe, &ret, sizeof(int), session_id);
+			send_msg(*client_pipe, &ret, sizeof(int), session_id);
 			break;
 		}
 
 		case TFS_OP_CODE_WRITE: {
+
+			/* Send return to client */
 			ssize_t ret = tfs_write(operation.fhandle, operation.buffer, operation.len);
-			send_msg(sessions[session_id].pipe, &ret, sizeof(ssize_t), session_id);
+			send_msg(*client_pipe, &ret, sizeof(ssize_t), session_id);
 			break;
 		}
 
 		case TFS_OP_CODE_READ: {
+
+			/* Send return and buffer to client */
 			ssize_t ret = tfs_read(operation.fhandle, operation.buffer, operation.len);
-			if (send_msg(sessions[session_id].pipe, &ret, sizeof(ssize_t), session_id) != 0 || ret == -1) {
+			if (send_msg(*client_pipe, &ret, sizeof(ssize_t), session_id) != 0 || ret == -1) {
 				break;
 			}
-			send_msg(sessions[session_id].pipe, operation.buffer, ret, session_id);
+			send_msg(*client_pipe, operation.buffer, ret, session_id);
+		}
+
+		case TFS_OP_CODE_UNMOUNT: {
+
+			/* Thread is now free */
+			*free = true;
+
+			/* Send return to client */
+			int ret;
+			send_msg(*client_pipe, &ret, sizeof(int), session_id);
+
+			break;
+		}
+
+		case TFS_OP_CODE_SHUTDOWN_AFTER_ALL_CLOSED: {
+
+			/* Send return to client */
+			int ret = tfs_destroy_after_all_closed();
+			send_msg(*client_pipe, &ret, sizeof(int), session_id);
+
+			/* Tell server that destroy has been called, successfully */
+			if (ret == 0) {
+				destroy_called = true;
+			}
+
+			break;
 		}
 		}
 	}
@@ -196,6 +244,8 @@ int main(int argc, char **argv) {
 		while ((r = read(server_pipe, &operation, sizeof(task_t))) != sizeof(task_t)) {
 			if (r == -1 && errno == EPIPE) {
 				exit(EXIT_FAILURE);
+			} else if (r == -1 && errno == EINTR) {
+				continue;
 			}
 		}
 
@@ -243,51 +293,46 @@ int main(int argc, char **argv) {
 			break;
 		}
 
-		case TFS_OP_CODE_UNMOUNT: {
-
-			/* Thread is now free */
-			sessions[operation.session_id].free = true;
-
-			/* Send return to client */
-			send_msg(sessions[operation.session_id].pipe, &ret, sizeof(int), operation.session_id);
-
-			break;
-		}
-
+		case TFS_OP_CODE_OPEN:
+		case TFS_OP_CODE_WRITE:
+		case TFS_OP_CODE_READ:
+		case TFS_OP_CODE_CLOSE:
+		case TFS_OP_CODE_UNMOUNT:
 		case TFS_OP_CODE_SHUTDOWN_AFTER_ALL_CLOSED: {
 
-			int ret = tfs_destroy_after_all_closed();
-			send_msg(sessions[operation.session_id].pipe, &ret, sizeof(int), operation.session_id);
+			/* Refer to session structure with more ease */
+			int session_id = operation.session_id;
+			pthread_mutex_t *lock = &sessions[session_id].lock;
+			pthread_cond_t *can_consume = &sessions[session_id].can_consume;
+			pthread_cond_t *can_produce = &sessions[session_id].can_produce;
+			task_t *buffer = sessions[session_id].buffer;
+			int *count = &sessions[session_id].count;
+			int *prodptr = &sessions[session_id].prodptr;
+			bool *free = &sessions[session_id].free;
+			int *client_pipe = &sessions[session_id].pipe;
 
-			if (ret == 0) {
-				destroy_called = true;
-			}
-
-			break;
-		}
-
-		case TFS_OP_CODE_OPEN: case TFS_OP_CODE_WRITE: case TFS_OP_CODE_READ: case TFS_OP_CODE_CLOSE: {
-
-			if (pthread_mutex_lock(&sessions[operation.session_id].lock) == -1) {
+			if (pthread_mutex_lock(lock) == -1) {
 				exit(EXIT_FAILURE);
 			}
 
-			while (sessions[operation.session_id].count == BUFFER_SIZE) {
-				if (pthread_cond_wait(&sessions[operation.session_id].can_produce, &sessions[operation.session_id].lock) != 0) {
+			/* Wait for slave thread to process requests */
+			while (*count == BUFFER_SIZE) {
+				if (pthread_cond_wait(can_produce, lock) != 0) {
 					exit(EXIT_FAILURE);
 				}
 			}
 
-			sessions[operation.session_id].buffer[sessions[operation.session_id].prodptr] = operation;
+			/* Send new request */
+			buffer[*prodptr] = operation;
+			(*prodptr)++; if (*prodptr == BUFFER_SIZE) *prodptr = 0;
+			(*count)++;
 
-			sessions[operation.session_id].prodptr++; if (sessions[operation.session_id].prodptr == BUFFER_SIZE) sessions[operation.session_id].prodptr = 0;
-			sessions[operation.session_id].count++;
-
-			if (pthread_cond_signal(&sessions[operation.session_id].can_consume) != 0) {
+			/* Signal slave thread */
+			if (pthread_cond_signal(can_consume) != 0) {
 				exit(EXIT_FAILURE);
 			}
 
-			if (pthread_mutex_unlock(&sessions[operation.session_id].lock) == -1) {
+			if (pthread_mutex_unlock(lock) == -1) {
 				exit(EXIT_FAILURE);
 			}
 
