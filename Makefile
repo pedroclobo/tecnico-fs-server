@@ -1,7 +1,5 @@
 CC = gcc
-CFLAGS = -std=c11 -D_POSIX_C_SOURCE=200809L -pthread -g
-#CFLAGS += -fsanitize=thread
-CFLAGS += -fsanitize=address -fsanitize=leak
+CFLAGS = -std=c11 -D_POSIX_C_SOURCE=200809L -pthread
 
 INCLUDE_DIRS := fs common .
 INCLUDES = $(addprefix -I, $(INCLUDE_DIRS))
@@ -23,11 +21,11 @@ test-db%: test-db%.o fs/operations.o fs/state.o
 test-cs%: test-cs%.o client/tecnicofs_client_api.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-fs/tfs_server: fs/*.o
+fs/tfs_server: fs/operations.o fs/state.o fs/tfs_server.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-tests::
-	(cd tests && bash run.sh)
-
 clean::
-	rm -f $(OBJECTS) $(TESTS) $(TEST_OBJECTS) $(TARGET_EXECS) *.txt *.zip *.pipe tests/*.pipe
+	rm -f $(OBJECTS) $(TESTS) $(TEST_OBJECTS) $(TARGET_EXECS) *.zip
+
+zip::
+	zip proj.zip Makefile fs/*.c fs/*.h common/*.h common/*.c client/*.c client/*.h
